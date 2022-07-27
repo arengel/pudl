@@ -45,8 +45,10 @@ class Extractor(excel.GenericExtractor):
             df["report_year"] = datetime.strptime(
                 list(partition.values())[0], "%Y-%m"
             ).year
+        if "report_date" not in df.columns:
+            df["report_date"] = datetime.strptime(list(partition.values())[0], "%Y-%m")
         df = df.assign(data_source="eia860m")
-        self.cols_added = ["data_source", "report_year"]
+        self.cols_added = ["data_source", "report_year", "report_date"]
         df = fix_leading_zero_gen_ids(df)
         return df
 

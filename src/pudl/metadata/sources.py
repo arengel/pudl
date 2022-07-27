@@ -77,7 +77,12 @@ SOURCES: dict[str, Any] = {
         "field_namespace": "eia",
         "contributors": [],
         "working_partitions": {
-            "year_month": "2021-12",
+            # "year_month": "2021-12",
+            "year_month": [
+                f"20{y}-{m:02}" for y in range(15, 22) for m in range(1, 13)
+            ][
+                6:
+            ],  # monthly data starts July 2015 and runs through Jun 2022
         },
         "keywords": sorted(
             set(
