@@ -348,6 +348,133 @@ def generators(eia860_dfs, eia860_transformed_dfs):
     return eia860_transformed_dfs
 
 
+def generators_monthly(eia860m_dfs, eia860_transformed_dfs):
+    """Pull and transform the monthly generators table.
+
+    There are three tabs that the generator records come from (proposed, existing,
+    retired).
+
+    Transformations include:
+
+    * Replace . values with NA.
+    * Update ``operational_status_code`` to reflect plant status as either proposed,
+      existing or retired.
+    * Drop values with NA for plant and generator id.
+    * Replace 0 values with NA where appropriate.
+    * Map full spelling onto code values.
+    * Create a fuel_type_code_pudl field that organizes fuel types into
+      clean, distinguishable categories.
+
+    Args:
+        eia860m_dfs (dict): Each entry in this
+            dictionary of DataFrame objects corresponds to a page from the EIA860m form,
+            as reported in the Excel spreadsheets they distribute.
+        eia860_transformed_dfs (dict): A dictionary of DataFrame objects in which pages
+            from EIA860 form (keys) correspond to normalized DataFrames of values from
+            that page (values).
+
+    Returns:
+        dict: eia860_transformed_dfs, a dictionary of DataFrame objects in which pages
+        from EIA860 form (keys) correspond to normalized DataFrames of values from that
+        page (values).
+
+    """
+    # Groupby objects were creating chained assignment warning that is N/A
+    pd.options.mode.chained_assignment = None
+
+    # There are three sets of generator data reported in the EIA860 table,
+    # planned, existing, and retired generators. We're going to concatenate
+    # them all together into a single big table, with a column that indicates
+    # which one of these tables the data came from, since they all have almost
+    # exactly the same structure
+    gp_df = eia860m_dfs["generator_proposed"].copy()
+    ge_df = eia860m_dfs["generator_existing"].copy()
+    gr_df = eia860m_dfs["generator_retired"].copy()
+    # the retired tab of eia860 does not have a operational_status_code column.
+    # we still want these gens to have a code (and subsequently a
+    # operational_status). We could do this by fillna w/ the retirement_date, but
+    # this way seems more straightforward.
+    gr_df["operational_status_code"] = "RE"
+
+    gens_df = (
+        pd.concat([ge_df, gp_df, gr_df], sort=True)
+        .dropna(subset=["generator_id", "plant_id_eia"])
+        .pipe(pudl.helpers.fix_eia_na)
+        .rename(columns={"report_year": "report_date"})
+    )
+
+    # A subset of the columns have zero values, where NA is appropriate:
+    columns_to_fix = [
+        "planned_retirement_month",
+        "planned_retirement_year",
+        "planned_uprate_month",
+        "planned_uprate_year",
+        "planned_derate_month",
+        "planned_derate_year",
+        "planned_net_summer_capacity_derate_mw",
+        "planned_net_summer_capacity_uprate_mw",
+        "winter_capacity_mw",
+        "summer_capacity_mw",
+    ]
+
+    for column in columns_to_fix:
+        gens_df[column] = gens_df[column].replace(to_replace=[" ", 0], value=np.nan)
+
+    gens_df = gens_df.pipe(pudl.helpers.month_year_to_date).pipe(
+        pudl.helpers.convert_to_date
+    )
+
+    gens_df = (
+        pudl.metadata.classes.Package.from_resource_ids()
+        .get_resource("generators_eia860")
+        .encode(gens_df)
+    )
+
+    gens_df["fuel_type_code_pudl"] = gens_df.energy_source_code_1.str.upper().map(
+        pudl.helpers.label_map(
+            CODE_METADATA["energy_sources_eia"]["df"],
+            from_col="code",
+            to_col="fuel_type_code_pudl",
+            null_value=pd.NA,
+        )
+    )
+
+    gens_df["operational_status"] = gens_df.operational_status_code.str.upper().map(
+        pudl.helpers.label_map(
+            CODE_METADATA["operational_status_eia"]["df"],
+            from_col="code",
+            to_col="operational_status",
+            null_value=pd.NA,
+        )
+    )
+
+    # I don't think this should actually work this way but ok just for now...
+    eia860_transformed_dfs["generator_monthly"] = gens_df
+    # this is an idea for how to figure out announcements of planned retirements, unfortunately
+    # it doesn't work exactly, part of it might be conversions but also canceled retirements, etc.
+    eia860_transformed_dfs["retirement_announced_date"] = (
+        gens_df.query(
+            "planned_retirement_date.notna() & operational_status == 'existing'"
+        )
+        .groupby(["plant_id_eia", "generator_id"])
+        .report_date.min()
+        .to_frame(name="retirement_announced_date")
+    )
+    eia860_transformed_dfs["proposed_announced_date"] = (
+        gens_df.query(
+            "current_planned_operating_date.notna() & operational_status == 'proposed'"
+        )
+        .groupby(["plant_id_eia", "generator_id"])
+        .report_date.min()
+        .to_frame(name="proposed_announced_date")
+    )
+    eia860_transformed_dfs["fuel_change"] = gens_df.groupby(
+        ["plant_id_eia", "generator_id", pd.Grouper(freq="YS", key="report_date")]
+    ).energy_source_code_1.agg([pd.Series.unique, pd.Series.nunique])
+
+    return eia860_transformed_dfs
+
+
 def plants(eia860_dfs, eia860_transformed_dfs):
     """Pull and transform the plants table.
 

@@ -42,9 +42,7 @@ class Extractor(excel.GenericExtractor):
         """Adds source column and report_year column if missing."""
         df = df.rename(columns=self._metadata.get_column_map(page, **partition))
         if "report_year" not in df.columns:
-            df["report_year"] = datetime.strptime(
-                list(partition.values())[0], "%Y-%m"
-            ).year
+            df["report_year"] = datetime.strptime(list(partition.values())[0], "%Y-%m")
         df = self.add_data_maturity(df, page, **partition)
         self.cols_added.append("report_year")
         df = fix_leading_zero_gen_ids(df)
